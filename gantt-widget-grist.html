@@ -248,6 +248,9 @@
     font-size: 12px;
   }
 
+  .stat-case .valeur.depassement { color: var(--rouge-retard); }
+  .stat-case .valeur.equilibre { color: var(--vert-succes); }
+
   #tableau-taches-modal th {
     text-align: left;
     padding: 6px 8px;
@@ -449,6 +452,18 @@
           <div class="valeur" id="stat-avancement">–</div>
           <div class="libelle-stat">Avancement moyen</div>
         </div>
+        <div class="stat-case">
+          <div class="valeur" id="stat-budget">–</div>
+          <div class="libelle-stat">Budget prévu</div>
+        </div>
+        <div class="stat-case">
+          <div class="valeur" id="stat-depense">–</div>
+          <div class="libelle-stat">Dépensé</div>
+        </div>
+        <div class="stat-case" id="case-reste">
+          <div class="valeur" id="stat-reste">–</div>
+          <div class="libelle-stat">Reste (% consommé)</div>
+        </div>
       </div>
       <table id="tableau-taches-modal">
         <thead>
@@ -456,7 +471,10 @@
             <th>Tâche</th>
             <th>Début</th>
             <th>Fin</th>
-            <th>Avancement</th>
+            <th>Avanc.</th>
+            <th>Budget</th>
+            <th>Coût réel</th>
+            <th>Écart</th>
           </tr>
         </thead>
         <tbody id="corps-tableau-modal"></tbody>
@@ -478,7 +496,10 @@
       { name: "Fin", title: "Date de fin", type: "Date" },
       { name: "Avancement", title: "Avancement (%)", optional: true, type: "Numeric" },
       { name: "Categorie", title: "Projet / Lot", optional: true, type: "Any" },
-      { name: "Statut", title: "Statut", optional: true, type: "Any" }
+      { name: "Statut", title: "Statut", optional: true, type: "Any" },
+      { name: "Budget", title: "Budget prévu (tâche)", optional: true, type: "Numeric" },
+      { name: "CoutReel", title: "Coût réel (tâche)", optional: true, type: "Numeric" },
+      { name: "BudgetProjet", title: "Budget global du projet (optionnel, écrase la somme des tâches)", optional: true, type: "Numeric" }
     ]
   });
 
@@ -520,7 +541,11 @@
       fin: fin,
       avancement: clamp(Number(r.Avancement) || 0, 0, 100),
       categorie: r.Categorie || "",
-      statut: (r.Statut || "").toString().toLowerCase()
+      statut: (r.Statut || "").toString().toLowerCase(),
+      budget: Number(r.Budget) || 0,
+      coutReel: Number(r.CoutReel) || 0,
+      budgetProjetOverride: (r.BudgetProjet !== undefined && r.BudgetProjet !== null && r.BudgetProjet !== "")
+        ? Number(r.BudgetProjet) : null
     };
   }
 
@@ -754,12 +779,21 @@
 
     var min = tachesProjet[0].debut, max = tachesProjet[0].fin;
     var sommeAvancement = 0;
+    var sommeBudget = 0;
+    var sommeCoutReel = 0;
+    var budgetProjetOverride = null;
     tachesProjet.forEach(function (t) {
       if (t.debut < min) min = t.debut;
       if (t.fin > max) max = t.fin;
       sommeAvancement += t.avancement;
+      sommeBudget += t.budget;
+      sommeCoutReel += t.coutReel;
+      if (t.budgetProjetOverride !== null) budgetProjetOverride = t.budgetProjetOverride;
     });
     var avancementMoyen = Math.round(sommeAvancement / tachesProjet.length);
+    var budgetTotal = budgetProjetOverride !== null ? budgetProjetOverride : sommeBudget;
+    var reste = budgetTotal - sommeCoutReel;
+    var pctConsomme = budgetTotal > 0 ? Math.round((sommeCoutReel / budgetTotal) * 100) : null;
 
     document.getElementById("titre-modal").textContent = nomProjet;
     document.getElementById("stat-nb-taches").textContent = tachesProjet.length;
@@ -767,6 +801,17 @@
       min.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" }) + " → " +
       max.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
     document.getElementById("stat-avancement").textContent = avancementMoyen + " %";
+    document.getElementById("stat-budget").textContent = formaterMontant(budgetTotal);
+    document.getElementById("stat-depense").textContent = formaterMontant(sommeCoutReel);
+
+    var elReste = document.getElementById("stat-reste");
+    elReste.classList.remove("depassement", "equilibre");
+    if (budgetTotal > 0) {
+      elReste.textContent = formaterMontant(reste) + (pctConsomme !== null ? " (" + pctConsomme + " %)" : "");
+      elReste.classList.add(reste < 0 ? "depassement" : "equilibre");
+    } else {
+      elReste.textContent = "–";
+    }
 
     var corpsTableau = document.getElementById("corps-tableau-modal");
     corpsTableau.innerHTML = "";
@@ -781,16 +826,28 @@
           "": "var(--bleu-clair)"
         }[classeStatut(t.statut, t.fin, t.avancement)];
 
+        var ecart = t.budget - t.coutReel;
+        var styleEcart = (t.budget > 0 || t.coutReel > 0)
+          ? ' style="color:' + (ecart < 0 ? "var(--rouge-retard)" : "var(--vert-succes)") + '"'
+          : "";
+
         var tr = document.createElement("tr");
         tr.innerHTML =
           '<td><span class="puce-statut-modal" style="background:' + couleurStatut + '"></span>' + escapeHtml(t.titre) + "</td>" +
           "<td>" + t.debut.toLocaleDateString("fr-FR") + "</td>" +
           "<td>" + t.fin.toLocaleDateString("fr-FR") + "</td>" +
-          "<td>" + t.avancement + " %</td>";
+          "<td>" + t.avancement + " %</td>" +
+          "<td>" + (t.budget ? formaterMontant(t.budget) : "–") + "</td>" +
+          "<td>" + (t.coutReel ? formaterMontant(t.coutReel) : "–") + "</td>" +
+          "<td" + styleEcart + ">" + ((t.budget || t.coutReel) ? formaterMontant(ecart) : "–") + "</td>";
         corpsTableau.appendChild(tr);
       });
 
     fondModal.classList.add("visible");
+  }
+
+  function formaterMontant(valeur) {
+    return Math.round(valeur).toLocaleString("fr-FR") + " €";
   }
 
   function escapeHtml(s) {
