@@ -161,9 +161,114 @@
     background: var(--gris-fond);
     color: var(--bleu-france);
     font-size: 12px;
-    cursor: default;
+    cursor: pointer;
   }
-  .ligne-tache.categorie:hover { background: var(--gris-fond); }
+  .ligne-tache.categorie:hover { background: var(--gris-bordure); }
+
+  /* --- Fenêtre modale : détails d'un projet --- */
+  #fond-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 20, 0.45);
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #fond-modal.visible { display: flex; }
+
+  #contenu-modal {
+    background: var(--blanc);
+    width: min(560px, 92vw);
+    max-height: 82vh;
+    overflow-y: auto;
+    border-top: 4px solid var(--bleu-france);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    border-radius: 2px;
+  }
+
+  #entete-modal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--gris-bordure);
+  }
+
+  #entete-modal h2 {
+    margin: 0;
+    font-size: 16px;
+    color: var(--bleu-france);
+  }
+
+  #bouton-fermer-modal {
+    border: none;
+    background: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--gris-texte);
+    padding: 4px 8px;
+  }
+
+  #bouton-fermer-modal:hover { color: var(--bleu-france); }
+
+  #corps-modal { padding: 16px 18px; }
+
+  .stats-projet {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .stat-case {
+    background: var(--gris-fond);
+    border-radius: 3px;
+    padding: 10px;
+    text-align: center;
+  }
+
+  .stat-case .valeur {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--bleu-france);
+  }
+
+  .stat-case .libelle-stat {
+    font-size: 11px;
+    color: #5a5a5a;
+    margin-top: 2px;
+  }
+
+  #tableau-taches-modal {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  #tableau-taches-modal th {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 2px solid var(--bleu-france);
+    color: var(--bleu-france);
+    font-size: 11px;
+  }
+
+  #tableau-taches-modal td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--gris-fond);
+  }
+
+  .puce-statut-modal {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
 
   #zone-timeline {
     flex: 1;
@@ -321,6 +426,42 @@
     Aucune tâche à afficher. Vérifiez le mappage des colonnes dans la
     configuration du widget (icône ⚙ en haut du panneau Grist), ou ajoutez
     des lignes avec au moins un Titre, une Date de début et une Date de fin.
+  </div>
+</div>
+
+<div id="fond-modal">
+  <div id="contenu-modal">
+    <div id="entete-modal">
+      <h2 id="titre-modal">Projet</h2>
+      <button id="bouton-fermer-modal" aria-label="Fermer">×</button>
+    </div>
+    <div id="corps-modal">
+      <div class="stats-projet">
+        <div class="stat-case">
+          <div class="valeur" id="stat-nb-taches">–</div>
+          <div class="libelle-stat">Tâches</div>
+        </div>
+        <div class="stat-case">
+          <div class="valeur" id="stat-periode">–</div>
+          <div class="libelle-stat">Période</div>
+        </div>
+        <div class="stat-case">
+          <div class="valeur" id="stat-avancement">–</div>
+          <div class="libelle-stat">Avancement moyen</div>
+        </div>
+      </div>
+      <table id="tableau-taches-modal">
+        <thead>
+          <tr>
+            <th>Tâche</th>
+            <th>Début</th>
+            <th>Fin</th>
+            <th>Avancement</th>
+          </tr>
+        </thead>
+        <tbody id="corps-tableau-modal"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -523,6 +664,7 @@
         var enteteCat = document.createElement("div");
         enteteCat.className = "ligne-tache categorie";
         enteteCat.textContent = groupe.nom;
+        enteteCat.addEventListener("click", function () { ouvrirDetailsProjet(this.textContent); });
         corpsListe.appendChild(enteteCat);
 
         var grilleCat = document.createElement("div");
@@ -588,6 +730,74 @@
       etiquette.textContent = "Aujourd'hui";
       corpsTimeline.appendChild(etiquette);
     }
+  }
+
+  // ---- Fenêtre modale : détails d'un projet ----
+  var fondModal = document.getElementById("fond-modal");
+  document.getElementById("bouton-fermer-modal").addEventListener("click", fermerModal);
+  fondModal.addEventListener("click", function (e) {
+    if (e.target === fondModal) fermerModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") fermerModal();
+  });
+
+  function fermerModal() {
+    fondModal.classList.remove("visible");
+  }
+
+  function ouvrirDetailsProjet(nomProjet) {
+    var tachesProjet = taches.filter(function (t) {
+      return (t.categorie || "Sans catégorie") === nomProjet;
+    });
+    if (!tachesProjet.length) return;
+
+    var min = tachesProjet[0].debut, max = tachesProjet[0].fin;
+    var sommeAvancement = 0;
+    tachesProjet.forEach(function (t) {
+      if (t.debut < min) min = t.debut;
+      if (t.fin > max) max = t.fin;
+      sommeAvancement += t.avancement;
+    });
+    var avancementMoyen = Math.round(sommeAvancement / tachesProjet.length);
+
+    document.getElementById("titre-modal").textContent = nomProjet;
+    document.getElementById("stat-nb-taches").textContent = tachesProjet.length;
+    document.getElementById("stat-periode").textContent =
+      min.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" }) + " → " +
+      max.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    document.getElementById("stat-avancement").textContent = avancementMoyen + " %";
+
+    var corpsTableau = document.getElementById("corps-tableau-modal");
+    corpsTableau.innerHTML = "";
+    tachesProjet
+      .slice()
+      .sort(function (a, b) { return a.debut - b.debut; })
+      .forEach(function (t) {
+        var couleurStatut = {
+          "statut-retard": "var(--rouge-retard)",
+          "statut-termine": "var(--vert-succes)",
+          "statut-attente": "var(--orange-attente)",
+          "": "var(--bleu-clair)"
+        }[classeStatut(t.statut, t.fin, t.avancement)];
+
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          '<td><span class="puce-statut-modal" style="background:' + couleurStatut + '"></span>' + escapeHtml(t.titre) + "</td>" +
+          "<td>" + t.debut.toLocaleDateString("fr-FR") + "</td>" +
+          "<td>" + t.fin.toLocaleDateString("fr-FR") + "</td>" +
+          "<td>" + t.avancement + " %</td>";
+        corpsTableau.appendChild(tr);
+      });
+
+    fondModal.classList.add("visible");
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   // ---- Sélection : synchronise avec la grille Grist ----
