@@ -13,7 +13,613 @@
   puisse lire les données de votre document Grist. C'est le même script
   utilisé par tous les widgets custom, y compris ceux audités par la DINUM.
 
+  Colonnes attendues dans votre table Grist (configurables à l'ajout du<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gantt — Widget Grist</title>
+
+<!--
+  WIDGET GANTT POUR GRIST — GESTION DE PROJETS (IMMOBILIER / CHANTIERS)
+  =======================================================================
+  Fichier unique, autonome. Aucune dépendance externe autre que l'API
+  officielle de Grist (grist-plugin-api.js), nécessaire pour que ce widget
+  puisse lire les données de votre document Grist. C'est le même script
+  utilisé par tous les widgets custom, y compris ceux audités par la DINUM.
+
   Colonnes attendues dans votre table Grist (configurables à l'ajout du
+  widget, dans le panneau "Configuration du widget") :
+    - Titre        (Texte)   : nom de la tâche / du lot
+    - Debut        (Date)    : date de début
+    - Fin          (Date)    : date de fin
+    - Avancement   (Numeric, optionnel) : 0 à 100
+    - Categorie    (Texte, optionnel)   : ex. nom du projet / du bien
+    - Statut       (Texte, optionnel)   : ex. "En cours", "Terminé", "Retard"
+
+  Aucune donnée n'est envoyée à l'extérieur : tout le traitement se fait
+  dans le navigateur, les seuls échanges sont avec votre document Grist
+  via window.postMessage (mécanisme standard des widgets custom Grist).
+-->
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+
+<style>
+  :root {
+    /* Palette inspirée du système de design de l'État (DSFR) :
+       sobre, fonctionnelle, pas de dégradé, pas de décoratif inutile. */
+    --bleu-france:   #000091;
+    --bleu-clair:     #6a6af4;
+    --gris-fond:      #f6f6f6;
+    --gris-bordure:   #e3e3fd;
+    --gris-texte:     #3a3a3a;
+    --blanc:          #ffffff;
+    --vert-succes:    #18753c;
+    --rouge-retard:   #e1000f;
+    --orange-attente: #b34000;
+
+    --hauteur-ligne: 36px;
+    --largeur-liste: 260px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--gris-texte);
+    background: var(--blanc);
+    font-size: 14px;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  /* --- Barre d'outils --- */
+  #toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 2px solid var(--bleu-france);
+    background: var(--blanc);
+    flex-shrink: 0;
+  }
+
+  #toolbar .titre {
+    font-weight: 700;
+    color: var(--bleu-france);
+    font-size: 15px;
+  }
+
+  #toolbar .controles {
+    display: flex;
+    gap: 6px;
+  }
+
+  .btn-echelle {
+    border: 1px solid var(--bleu-france);
+    background: var(--blanc);
+    color: var(--bleu-france);
+    padding: 4px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+
+  .btn-echelle.actif {
+    background: var(--bleu-france);
+    color: var(--blanc);
+  }
+
+  .legende {
+    display: flex;
+    gap: 14px;
+    font-size: 12px;
+    align-items: center;
+    color: #5a5a5a;
+  }
+
+  .legende span { display: flex; align-items: center; gap: 5px; }
+  .puce { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* --- Zone principale : liste des tâches + timeline --- */
+  #zone-principale {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  #liste-taches {
+    width: var(--largeur-liste);
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--gris-bordure);
+    background: var(--blanc);
+  }
+
+  .entete-liste {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--bleu-france);
+    border-bottom: 1px solid var(--gris-bordure);
+    position: sticky;
+    top: 0;
+    background: var(--blanc);
+  }
+
+  .ligne-tache {
+    height: var(--hauteur-ligne);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--gris-fond);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+
+  .ligne-tache:hover { background: var(--gris-fond); }
+  .ligne-tache.selection { background: #ececff; }
+
+  .ligne-tache.categorie {
+    font-weight: 700;
+    background: var(--gris-fond);
+    color: var(--bleu-france);
+    font-size: 12px;
+    cursor: default;
+  }
+  .ligne-tache.categorie:hover { background: var(--gris-fond); }
+
+  #zone-timeline {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+  }
+
+  #entete-timeline {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--blanc);
+    border-bottom: 1px solid var(--gris-bordure);
+  }
+
+  .ligne-entete-mois, .ligne-entete-jours {
+    display: flex;
+    height: 26px;
+  }
+
+  .cellule-mois {
+    border-right: 1px solid var(--gris-bordure);
+    border-bottom: 1px solid var(--gris-bordure);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--bleu-france);
+    display: flex;
+    align-items: center;
+    padding-left: 6px;
+    text-transform: capitalize;
+    box-sizing: border-box;
+  }
+
+  .cellule-jour {
+    border-right: 1px solid var(--gris-fond);
+    font-size: 10px;
+    color: #8a8a8a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+
+  .cellule-jour.weekend { background: var(--gris-fond); }
+
+  #corps-timeline {
+    position: relative;
+  }
+
+  .ligne-grille {
+    height: var(--hauteur-ligne);
+    border-bottom: 1px solid var(--gris-fond);
+    position: relative;
+  }
+
+  .ligne-grille.categorie {
+    background: var(--gris-fond);
+  }
+
+  .barre-tache {
+    position: absolute;
+    top: 6px;
+    height: calc(var(--hauteur-ligne) - 12px);
+    border-radius: 4px;
+    background: var(--bleu-clair);
+    box-shadow: inset 0 0 0 1px var(--bleu-france);
+    cursor: pointer;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+
+  .barre-tache .remplissage {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    background: var(--bleu-france);
+    opacity: 0.55;
+  }
+
+  .barre-tache .libelle {
+    position: relative;
+    z-index: 1;
+    font-size: 11px;
+    color: var(--blanc);
+    padding-left: 6px;
+    white-space: nowrap;
+    text-shadow: 0 0 2px rgba(0,0,0,0.4);
+  }
+
+  .barre-tache.statut-retard { background: var(--rouge-retard); box-shadow: inset 0 0 0 1px #9c000a; }
+  .barre-tache.statut-termine { background: var(--vert-succes); box-shadow: inset 0 0 0 1px #0f4c27; }
+  .barre-tache.statut-attente { background: var(--orange-attente); box-shadow: inset 0 0 0 1px #7a2c00; }
+
+  .ligne-aujourdhui {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 2px dashed var(--rouge-retard);
+    z-index: 2;
+  }
+
+  .etiquette-aujourdhui {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 10px;
+    color: var(--rouge-retard);
+    font-weight: 700;
+    z-index: 2;
+    white-space: nowrap;
+  }
+
+  #etat-vide {
+    display: none;
+    padding: 40px;
+    text-align: center;
+    color: #8a8a8a;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="toolbar">
+    <div class="titre">Diagramme de Gantt</div>
+    <div class="legende">
+      <span><span class="puce" style="background:var(--bleu-clair)"></span>En cours</span>
+      <span><span class="puce" style="background:var(--vert-succes)"></span>Terminé</span>
+      <span><span class="puce" style="background:var(--rouge-retard)"></span>Retard</span>
+      <span><span class="puce" style="background:var(--orange-attente)"></span>En attente</span>
+    </div>
+    <div class="controles">
+      <button class="btn-echelle" data-echelle="semaine">Semaine</button>
+      <button class="btn-echelle actif" data-echelle="mois">Mois</button>
+    </div>
+  </div>
+
+  <div id="zone-principale">
+    <div id="liste-taches">
+      <div class="entete-liste">Tâches</div>
+      <div id="corps-liste"></div>
+    </div>
+    <div id="zone-timeline">
+      <div id="entete-timeline">
+        <div class="ligne-entete-mois" id="entete-mois"></div>
+        <div class="ligne-entete-jours" id="entete-jours"></div>
+      </div>
+      <div id="corps-timeline"></div>
+    </div>
+  </div>
+
+  <div id="etat-vide">
+    Aucune tâche à afficher. Vérifiez le mappage des colonnes dans la
+    configuration du widget (icône ⚙ en haut du panneau Grist), ou ajoutez
+    des lignes avec au moins un Titre, une Date de début et une Date de fin.
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- Configuration des colonnes attendues (mappage côté utilisateur) ----
+  grist.ready({
+    requiredAccess: "read table",
+    columns: [
+      { name: "Titre", title: "Nom de la tâche" },
+      { name: "Debut", title: "Date de début", type: "Date" },
+      { name: "Fin", title: "Date de fin", type: "Date" },
+      { name: "Avancement", title: "Avancement (%)", optional: true, type: "Numeric" },
+      { name: "Categorie", title: "Projet / Lot", optional: true, type: "Text" },
+      { name: "Statut", title: "Statut", optional: true, type: "Text" }
+    ]
+  });
+
+  var JOUR_MS = 24 * 60 * 60 * 1000;
+  var echelle = "mois";       // "mois" ou "semaine"
+  var largeurJour = 6;         // px par jour, recalculé selon échelle
+  var taches = [];
+  var ligneSelectionneeId = null;
+
+  document.querySelectorAll(".btn-echelle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".btn-echelle").forEach(function (b) { b.classList.remove("actif"); });
+      btn.classList.add("actif");
+      echelle = btn.getAttribute("data-echelle");
+      largeurJour = echelle === "semaine" ? 26 : 7;
+      dessiner();
+    });
+  });
+
+  // ---- Réception des données Grist ----
+  grist.onRecords(function (records, mappings) {
+    var lignes = grist.mapColumnNames(records, mappings) || records;
+    taches = lignes
+      .map(function (r) { return normaliserTache(r); })
+      .filter(function (t) { return t && t.debut && t.fin; });
+    dessiner();
+  });
+
+  function normaliserTache(r) {
+    if (!r) return null;
+    var debut = versDate(r.Debut);
+    var fin = versDate(r.Fin);
+    if (!debut || !fin) return null;
+    if (fin < debut) { var tmp = fin; fin = debut; debut = tmp; }
+    return {
+      id: r.id,
+      titre: r.Titre || "(sans titre)",
+      debut: debut,
+      fin: fin,
+      avancement: clamp(Number(r.Avancement) || 0, 0, 100),
+      categorie: r.Categorie || "",
+      statut: (r.Statut || "").toString().toLowerCase()
+    };
+  }
+
+  function versDate(valeur) {
+    if (valeur == null) return null;
+    // Grist renvoie les dates en secondes epoch (nombre) le plus souvent.
+    if (typeof valeur === "number") return new Date(valeur * 1000);
+    var d = new Date(valeur);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+  function classeStatut(statut, fin, avancement) {
+    // 1. Un statut explicitement marqué "terminé" prime sur tout, même si
+    //    la date de fin est passée.
+    if (statut.indexOf("termin") !== -1 || avancement >= 100) return "statut-termine";
+
+    // 2. Retard calculé automatiquement : date de fin dépassée et tâche
+    //    non terminée — que le champ Statut soit renseigné ou non.
+    var aujourdhuiMinuit = new Date();
+    aujourdhuiMinuit.setHours(0, 0, 0, 0);
+    if (fin < aujourdhuiMinuit) return "statut-retard";
+
+    // 3. Statut textuel explicite pour "en attente"
+    if (statut.indexOf("attente") !== -1) return "statut-attente";
+
+    // 4. Statut textuel explicite pour "retard" (au cas où la date ne
+    //    serait pas encore dépassée mais l'utilisateur le sait déjà)
+    if (statut.indexOf("retard") !== -1) return "statut-retard";
+
+    return "";
+  }
+
+  // ---- Regroupement par catégorie (projet / lot) ----
+  function regrouper(taches) {
+    var groupes = {};
+    var ordre = [];
+    taches.forEach(function (t) {
+      var cle = t.categorie || "Sans catégorie";
+      if (!groupes[cle]) { groupes[cle] = []; ordre.push(cle); }
+      groupes[cle].push(t);
+    });
+    return ordre.map(function (cle) { return { nom: cle, taches: groupes[cle] }; });
+  }
+
+  // ---- Rendu principal ----
+  function dessiner() {
+    var etatVide = document.getElementById("etat-vide");
+    var zonePrincipale = document.getElementById("zone-principale");
+
+    if (!taches.length) {
+      etatVide.style.display = "block";
+      zonePrincipale.style.display = "none";
+      return;
+    }
+    etatVide.style.display = "none";
+    zonePrincipale.style.display = "flex";
+
+    var bornes = calculerBornes(taches);
+    dessinerEntete(bornes);
+    dessinerCorps(taches, bornes);
+  }
+
+  function calculerBornes(taches) {
+    var min = taches[0].debut, max = taches[0].fin;
+    taches.forEach(function (t) {
+      if (t.debut < min) min = t.debut;
+      if (t.fin > max) max = t.fin;
+    });
+    // Marge d'une semaine de part et d'autre pour la lisibilité
+    min = new Date(min.getTime() - 7 * JOUR_MS);
+    max = new Date(max.getTime() + 7 * JOUR_MS);
+    var nbJours = Math.max(1, Math.round((max - min) / JOUR_MS));
+    return { min: min, max: max, nbJours: nbJours };
+  }
+
+  function dessinerEntete(bornes) {
+    var eMois = document.getElementById("entete-mois");
+    var eJours = document.getElementById("entete-jours");
+    eMois.innerHTML = "";
+    eJours.innerHTML = "";
+
+    var largeurTotale = bornes.nbJours * largeurJour;
+    eMois.style.width = largeurTotale + "px";
+    eJours.style.width = largeurTotale + "px";
+
+    // Bandeau des mois
+    var curseur = new Date(bornes.min);
+    curseur.setDate(1);
+    while (curseur < bornes.max) {
+      var finMois = new Date(curseur.getFullYear(), curseur.getMonth() + 1, 1);
+      var debutVisible = curseur < bornes.min ? bornes.min : curseur;
+      var finVisible = finMois > bornes.max ? bornes.max : finMois;
+      var jours = Math.round((finVisible - debutVisible) / JOUR_MS);
+      var div = document.createElement("div");
+      div.className = "cellule-mois";
+      div.style.width = (jours * largeurJour) + "px";
+      div.textContent = curseur.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+      eMois.appendChild(div);
+      curseur = finMois;
+    }
+
+    // Bandeau des jours (uniquement en échelle "semaine", sinon graduations hebdo)
+    var pas = echelle === "semaine" ? 1 : 7;
+    for (var j = 0; j < bornes.nbJours; j += pas) {
+      var date = new Date(bornes.min.getTime() + j * JOUR_MS);
+      var estWeekend = echelle === "semaine" && (date.getDay() === 0 || date.getDay() === 6);
+      var cell = document.createElement("div");
+      cell.className = "cellule-jour" + (estWeekend ? " weekend" : "");
+      cell.style.width = (pas * largeurJour) + "px";
+      cell.textContent = echelle === "semaine"
+        ? date.getDate()
+        : "S" + numeroSemaine(date);
+      eJours.appendChild(cell);
+    }
+  }
+
+  function numeroSemaine(date) {
+    var d = new Date(date.getTime());
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+    var premierJeudi = new Date(d.getFullYear(), 0, 4);
+    return 1 + Math.round(((d - premierJeudi) / JOUR_MS - 3 + ((premierJeudi.getDay() + 6) % 7)) / 7);
+  }
+
+  function dessinerCorps(taches, bornes) {
+    var corpsListe = document.getElementById("corps-liste");
+    var corpsTimeline = document.getElementById("corps-timeline");
+    corpsListe.innerHTML = "";
+    corpsTimeline.innerHTML = "";
+
+    var largeurTotale = bornes.nbJours * largeurJour;
+    corpsTimeline.style.width = largeurTotale + "px";
+
+    var groupes = regrouper(taches);
+    var indexLigne = 0;
+
+    groupes.forEach(function (groupe) {
+      if (groupes.length > 1) {
+        var enteteCat = document.createElement("div");
+        enteteCat.className = "ligne-tache categorie";
+        enteteCat.textContent = groupe.nom;
+        corpsListe.appendChild(enteteCat);
+
+        var grilleCat = document.createElement("div");
+        grilleCat.className = "ligne-grille categorie";
+        corpsTimeline.appendChild(grilleCat);
+        indexLigne++;
+      }
+
+      groupe.taches.forEach(function (t) {
+        // -- Colonne de gauche --
+        var ligne = document.createElement("div");
+        ligne.className = "ligne-tache" + (t.id === ligneSelectionneeId ? " selection" : "");
+        ligne.textContent = t.titre;
+        ligne.title = t.titre;
+        ligne.addEventListener("click", function () { selectionner(t.id); });
+        corpsListe.appendChild(ligne);
+
+        // -- Ligne de grille + barre --
+        var grille = document.createElement("div");
+        grille.className = "ligne-grille";
+
+        var offsetJours = Math.round((t.debut - bornes.min) / JOUR_MS);
+        var dureeJours = Math.max(1, Math.round((t.fin - t.debut) / JOUR_MS) + 1);
+
+        var barre = document.createElement("div");
+        barre.className = "barre-tache " + classeStatut(t.statut, t.fin, t.avancement);
+        barre.style.left = (offsetJours * largeurJour) + "px";
+        barre.style.width = Math.max(4, dureeJours * largeurJour) + "px";
+        barre.title = t.titre + "\n" +
+          t.debut.toLocaleDateString("fr-FR") + " → " + t.fin.toLocaleDateString("fr-FR") +
+          "\nAvancement : " + t.avancement + " %";
+        barre.addEventListener("click", function () { selectionner(t.id); });
+
+        var remplissage = document.createElement("div");
+        remplissage.className = "remplissage";
+        remplissage.style.width = t.avancement + "%";
+        barre.appendChild(remplissage);
+
+        var libelle = document.createElement("div");
+        libelle.className = "libelle";
+        libelle.textContent = t.titre;
+        barre.appendChild(libelle);
+
+        grille.appendChild(barre);
+        corpsTimeline.appendChild(grille);
+        indexLigne++;
+      });
+    });
+
+    // Ligne "aujourd'hui"
+    var aujourdhui = new Date();
+    if (aujourdhui >= bornes.min && aujourdhui <= bornes.max) {
+      var offset = Math.round((aujourdhui - bornes.min) / JOUR_MS) * largeurJour;
+      var ligneAJ = document.createElement("div");
+      ligneAJ.className = "ligne-aujourdhui";
+      ligneAJ.style.left = offset + "px";
+      ligneAJ.style.height = (indexLigne * 36) + "px";
+      corpsTimeline.appendChild(ligneAJ);
+
+      var etiquette = document.createElement("div");
+      etiquette.className = "etiquette-aujourdhui";
+      etiquette.style.left = (offset + 4) + "px";
+      etiquette.textContent = "Aujourd'hui";
+      corpsTimeline.appendChild(etiquette);
+    }
+  }
+
+  // ---- Sélection : synchronise avec la grille Grist ----
+  function selectionner(id) {
+    ligneSelectionneeId = id;
+    dessiner();
+    if (grist && grist.setCursorPos) {
+      grist.setCursorPos({ rowId: id });
+    }
+  }
+
+})();
+</script>
+
+</body>
+</html>
+
   widget, dans le panneau "Configuration du widget") :
     - Titre        (Texte)   : nom de la tâche / du lot
     - Debut        (Date)    : date de début
