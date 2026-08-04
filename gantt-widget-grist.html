@@ -165,6 +165,18 @@
   }
   .ligne-tache.categorie:hover { background: var(--gris-bordure); }
 
+  .badge-litiges {
+    display: inline-block;
+    margin-left: 6px;
+    background: var(--rouge-retard);
+    color: var(--blanc);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    vertical-align: middle;
+  }
+
   /* --- Fenêtre modale : détails d'un projet --- */
   #fond-modal {
     display: none;
@@ -464,6 +476,10 @@
           <div class="valeur" id="stat-reste">–</div>
           <div class="libelle-stat">Reste (% consommé)</div>
         </div>
+        <div class="stat-case">
+          <div class="valeur" id="stat-litiges">–</div>
+          <div class="libelle-stat">Litiges ouverts</div>
+        </div>
       </div>
       <table id="tableau-taches-modal">
         <thead>
@@ -499,7 +515,8 @@
       { name: "Statut", title: "Statut", optional: true, type: "Any" },
       { name: "Budget", title: "Budget prévu (tâche)", optional: true, type: "Numeric" },
       { name: "CoutReel", title: "Coût réel (tâche)", optional: true, type: "Numeric" },
-      { name: "BudgetProjet", title: "Budget global du projet (optionnel, écrase la somme des tâches)", optional: true, type: "Numeric" }
+      { name: "BudgetProjet", title: "Budget global du projet (optionnel, écrase la somme des tâches)", optional: true, type: "Numeric" },
+      { name: "LitigesOuverts", title: "Nb litiges ouverts (formule Grist, voir doc)", optional: true, type: "Numeric" }
     ]
   });
 
@@ -545,7 +562,8 @@
       budget: Number(r.Budget) || 0,
       coutReel: Number(r.CoutReel) || 0,
       budgetProjetOverride: (r.BudgetProjet !== undefined && r.BudgetProjet !== null && r.BudgetProjet !== "")
-        ? Number(r.BudgetProjet) : null
+        ? Number(r.BudgetProjet) : null,
+      litigesOuverts: Number(r.LitigesOuverts) || 0
     };
   }
 
@@ -685,11 +703,20 @@
     var indexLigne = 0;
 
     groupes.forEach(function (groupe) {
-      if (groupes.length > 1) {
+      {
         var enteteCat = document.createElement("div");
         enteteCat.className = "ligne-tache categorie";
-        enteteCat.textContent = groupe.nom;
-        enteteCat.addEventListener("click", function () { ouvrirDetailsProjet(this.textContent); });
+        var nbLitigesGroupe = Math.max.apply(null, groupe.taches.map(function (t) { return t.litigesOuverts; }).concat(0));
+        enteteCat.innerHTML = '<span class="texte-nom-projet"></span>';
+        enteteCat.querySelector(".texte-nom-projet").textContent = groupe.nom;
+        if (nbLitigesGroupe > 0) {
+          var badge = document.createElement("span");
+          badge.className = "badge-litiges";
+          badge.textContent = "⚠ " + nbLitigesGroupe;
+          badge.title = nbLitigesGroupe + " litige(s) ouvert(s) — voir le widget Litiges";
+          enteteCat.appendChild(badge);
+        }
+        enteteCat.addEventListener("click", function () { ouvrirDetailsProjet(this.querySelector(".texte-nom-projet").textContent); });
         corpsListe.appendChild(enteteCat);
 
         var grilleCat = document.createElement("div");
@@ -815,6 +842,12 @@
 
     var corpsTableau = document.getElementById("corps-tableau-modal");
     corpsTableau.innerHTML = "";
+
+    var nbLitiges = Math.max.apply(null, tachesProjet.map(function (t) { return t.litigesOuverts; }).concat(0));
+    var elLitiges = document.getElementById("stat-litiges");
+    elLitiges.textContent = nbLitiges;
+    elLitiges.classList.toggle("depassement", nbLitiges > 0);
+    elLitiges.classList.toggle("equilibre", nbLitiges === 0);
     tachesProjet
       .slice()
       .sort(function (a, b) { return a.debut - b.debut; })
